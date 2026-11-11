@@ -269,9 +269,9 @@ class LeadsTab(ttk.Frame):
 
 class SettingsTab(ttk.Frame):
     FIELDS = (
-        ("naver_client_id", "네이버 API Client ID", False),
-        ("naver_client_secret", "네이버 API Client Secret", True),
-        ("anthropic_api_key", "Anthropic API Key (선택, 없으면 규칙 판별)", True),
+        ("naver_client_id", "NAVER API HUB Client ID", False),
+        ("naver_client_secret", "NAVER API HUB Client Secret", True),
+        ("anthropic_api_key", "Anthropic API Key (현재 리드 판별에는 미사용)", True),
         ("anthropic_model", f"AI 모델 (기본 {config.DEFAULT_MODEL})", False),
     )
 
@@ -287,9 +287,11 @@ class SettingsTab(ttk.Frame):
             ttk.Label(self, text="저장됨" if config.get(k) else "미설정").grid(row=r, column=2, sticky="w")
         ttk.Button(self, text="저장", command=self.save).grid(row=len(self.FIELDS), column=1, sticky="w", pady=8)
         help_text = (
-            "• 네이버 API: developers.naver.com → Application 등록 → 사용 API '검색' 선택 → Client ID/Secret 복사 (무료, 하루 25,000회)\n"
-            "• Anthropic API: console.anthropic.com → API Keys. 리드 1건 판별에 약 1회 호출, 하루 최대 "
-            f"{config.DAILY_AI_CALL_LIMIT}회로 제한\n"
+            "• 네이버 키: 네이버 클라우드 콘솔(console.ncloud.com) → Menu → All Services → Application Services → "
+            "NAVER API HUB → 이용 신청 → Application 등록(검색: 블로그·카페글 선택) → Application 선택 → "
+            "API 관리 → [인증 정보]에서 Client ID/Secret 복사. 구 developers.naver.com 키는 쓸 수 없습니다.\n"
+            "• 네이버 검색 결과는 개정 특약 때문에 외부 AI에 넣지 않고 키워드 규칙으로 판별합니다. "
+            "연락하지 않은 리드는 21일 뒤 자동 삭제됩니다.\n"
             "• 키는 Windows 자격 증명 관리자에 저장되며 파일로 남지 않습니다. 빈 칸은 기존 값을 유지합니다.\n"
             f"• 리드 DB 위치: {config.data_dir() / 'leads.db'}"
         )

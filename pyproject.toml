@@ -1,6 +1,6 @@
 [project]
 name = "bomyung-recovery"
-version = "0.2.0"
+version = "0.2.1"
 description = "봉명 재고회수 P0: 전자부품 재고 파일 접수·필드 추출·누락 표시·원문 근거·내보내기"
 requires-python = ">=3.12,<3.14"
 dependencies = [

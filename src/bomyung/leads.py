@@ -12,7 +12,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import httpx
 
@@ -111,14 +111,16 @@ class Hit:
 
 
 def naver_search(query: str, kind: str, client_id: str, secret: str, display: int = 50) -> list[Hit]:
+    # NAVER API HUB (네이버 클라우드). 구 developers.naver.com 키는 사용할 수 없음.
     r = httpx.get(
-        f"https://openapi.naver.com/v1/search/{kind}.json",
+        f"https://naverapihub.apigw.ntruss.com/search/v1/{kind}",
         params={"query": query, "display": display, "start": 1, "sort": "date"},
-        headers={"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": secret},
+        headers={"X-NCP-APIGW-API-KEY-ID": client_id, "X-NCP-APIGW-API-KEY": secret},
         timeout=15,
     )
     if r.status_code in (401, 403):
-        raise SearchError("네이버 API 키가 올바르지 않거나 검색 API 권한이 없습니다.")
+        raise SearchError("NAVER API HUB 키가 올바르지 않거나, Application에 검색 API(블로그·카페글)가 "
+                          "등록되지 않았습니다.")
     if r.status_code == 429:
         raise SearchError("네이버 API 일일 한도를 초과했습니다.")
     r.raise_for_status()
@@ -266,8 +268,23 @@ def _score(role: str, conf: float, post_date: str | None, contact: str) -> int:
     return max(0, min(100, s))
 
 
-def classify_pending(con: sqlite3.Connection, log=print, limit: int = 100) -> int:
-    key = config.get("anthropic_api_key")
+RETENTION_DAYS = 21  # 검색 API 특약: 서버 보관 최대 21일 (보도 기준). 손대지 않은 리드는 자동 삭제
+
+
+def purge_old(con: sqlite3.Connection) -> int:
+    """연락하지 않은(신규·제외) 리드는 21일이 지나면 삭제한다.
+    연락한 리드는 사용자 업무 기록이므로 링크·상태·메모만 남기고 검색 결과 본문은 지운다."""
+    cutoff = (datetime.now() - timedelta(days=RETENTION_DAYS)).isoformat(timespec="seconds")
+    n = con.execute("DELETE FROM leads WHERE found_at < ? AND status IN ('신규','제외')", (cutoff,)).rowcount
+    con.execute("UPDATE leads SET snippet='', title='(보관기간 경과)' WHERE found_at < ? "
+                "AND status NOT IN ('신규','제외') AND title != '(보관기간 경과)'", (cutoff,))
+    con.commit()
+    return n
+
+
+def classify_pending(con: sqlite3.Connection, log=print, limit: int = 100, use_ai: bool = False) -> int:
+    # 네이버 검색 결과를 외부 AI에 넣는 것은 개정 특약(AI 활용 제한)에 걸릴 수 있어 기본은 규칙 판별.
+    key = config.get("anthropic_api_key") if use_ai else None
     model = config.get("anthropic_model") or config.DEFAULT_MODEL
     rows = con.execute("SELECT * FROM leads WHERE role IS NULL ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     done = 0
@@ -310,6 +327,9 @@ def classify_pending(con: sqlite3.Connection, log=print, limit: int = 100) -> in
 def run(queries: list[str] | None = None, log=print) -> tuple[int, int]:
     con = connect()
     try:
+        gone = purge_old(con)
+        if gone:
+            log(f"보관기간({RETENTION_DAYS}일) 지난 리드 {gone}건 삭제")
         log("검색 중…")
         new = collect(con, queries or DEFAULT_QUERIES, log)
         log(f"판별 중… (신규 {new}건)")
