@@ -29,6 +29,39 @@ def set_(name: str, value: str) -> None:
         keyring.set_password(SERVICE, name, value)
 
 
+DEFAULT_NAVER_DAILY_LIMIT = 200  # 하루 네이버 검색 호출 상한 (실행 1회 ≈ 20회)
+
+
+def _settings_path() -> Path:
+    return data_dir() / "settings.json"
+
+
+def get_setting(name: str, default=None):
+    import json
+    try:
+        return json.loads(_settings_path().read_text(encoding="utf-8")).get(name, default)
+    except (OSError, ValueError):
+        return default
+
+
+def set_setting(name: str, value) -> None:
+    import json
+    p = _settings_path()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    data[name] = value
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def naver_daily_limit() -> int:
+    try:
+        return max(0, int(get_setting("naver_daily_limit", DEFAULT_NAVER_DAILY_LIMIT)))
+    except (TypeError, ValueError):
+        return DEFAULT_NAVER_DAILY_LIMIT
+
+
 def data_dir() -> Path:
     base = Path(os.environ.get("APPDATA", Path.home())) / "Bomyung"
     base.mkdir(parents=True, exist_ok=True)

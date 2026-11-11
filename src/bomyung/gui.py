@@ -257,6 +257,11 @@ class LeadsTab(ttk.Frame):
         threading.Thread(target=work, daemon=True).start()
 
     def done(self, text: str) -> None:
+        con = leads.connect()
+        try:
+            text += f" · 오늘 검색 {leads.naver_calls_today(con)}/{config.naver_daily_limit()}회"
+        finally:
+            con.close()
         self.busy = False
         self.run_btn.config(state="normal")
         self.reload()
@@ -285,21 +290,50 @@ class SettingsTab(ttk.Frame):
             ttk.Entry(self, textvariable=v, show="•" if secret else "").grid(row=r, column=1, sticky="ew", padx=6)
             self.vars[k] = v
             ttk.Label(self, text="저장됨" if config.get(k) else "미설정").grid(row=r, column=2, sticky="w")
-        ttk.Button(self, text="저장", command=self.save).grid(row=len(self.FIELDS), column=1, sticky="w", pady=8)
+        r0 = len(self.FIELDS)
+        ttk.Label(self, text="네이버 검색 하루 호출 한도 (회)").grid(row=r0, column=0, sticky="w", pady=4)
+        self.limit_var = tk.StringVar(value=str(config.naver_daily_limit()))
+        ttk.Spinbox(self, from_=0, to=25000, increment=20, textvariable=self.limit_var, width=10).grid(
+            row=r0, column=1, sticky="w", padx=6)
+        self.usage_lbl = ttk.Label(self, text="")
+        self.usage_lbl.grid(row=r0, column=2, sticky="w")
+        self.refresh_usage()
+        ttk.Button(self, text="저장", command=self.save).grid(row=r0 + 1, column=1, sticky="w", pady=8)
         help_text = (
             "• 네이버 키: 네이버 클라우드 콘솔(console.ncloud.com) → Menu → All Services → Application Services → "
             "NAVER API HUB → 이용 신청 → Application 등록(검색: 블로그·카페글 선택) → Application 선택 → "
             "API 관리 → [인증 정보]에서 Client ID/Secret 복사. 구 developers.naver.com 키는 쓸 수 없습니다.\n"
+            "• 하루 호출 한도: '리드 찾기 실행' 1번에 약 20회를 씁니다. 한도에 닿으면 검색이 자동으로 멈춥니다(0 = 검색 금지). "
+            "요금 안전장치로 네이버 클라우드 콘솔에서도 이용 한도·한도 초과 알림을 따로 걸어 두세요.\n"
             "• 네이버 검색 결과는 개정 특약 때문에 외부 AI에 넣지 않고 키워드 규칙으로 판별합니다. "
             "연락하지 않은 리드는 21일 뒤 자동 삭제됩니다.\n"
             "• 키는 Windows 자격 증명 관리자에 저장되며 파일로 남지 않습니다. 빈 칸은 기존 값을 유지합니다.\n"
             f"• 리드 DB 위치: {config.data_dir() / 'leads.db'}"
         )
         ttk.Label(self, text=help_text, justify="left", wraplength=680).grid(
-            row=len(self.FIELDS) + 1, column=0, columnspan=3, sticky="w", pady=12)
+            row=r0 + 2, column=0, columnspan=3, sticky="w", pady=12)
+
+    def refresh_usage(self) -> None:
+        con = leads.connect()
+        try:
+            used = leads.naver_calls_today(con)
+        finally:
+            con.close()
+        self.usage_lbl.config(text=f"오늘 사용 {used} / {config.naver_daily_limit()}회")
 
     def save(self) -> None:
         n = 0
+        try:
+            lim = int(self.limit_var.get())
+            if not 0 <= lim <= 25000:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("설정", "하루 한도는 0~25000 사이 숫자로 입력하세요.")
+            return
+        if lim != config.naver_daily_limit():
+            config.set_setting("naver_daily_limit", lim)
+            n += 1
+        self.refresh_usage()
         for k, v in self.vars.items():
             val = v.get().strip()
             if val:

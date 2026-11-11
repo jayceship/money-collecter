@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS leads (
     memo TEXT,
     classified_by TEXT             -- ai | rule
 );
+CREATE TABLE IF NOT EXISTS naver_usage (
+    day TEXT PRIMARY KEY,
+    calls INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS ai_usage (
     day TEXT PRIMARY KEY,
     calls INTEGER NOT NULL DEFAULT 0,
@@ -139,14 +143,34 @@ def naver_search(query: str, kind: str, client_id: str, secret: str, display: in
     return hits
 
 
+def naver_calls_today(con: sqlite3.Connection) -> int:
+    row = con.execute("SELECT calls FROM naver_usage WHERE day=?", (date.today().isoformat(),)).fetchone()
+    return row["calls"] if row else 0
+
+
+def _reserve_naver_call(con: sqlite3.Connection, limit: int) -> bool:
+    """호출 전에 1회를 먼저 기록한다(실패해도 차감). 한도를 넘으면 False."""
+    today = date.today().isoformat()
+    con.execute("INSERT OR IGNORE INTO naver_usage(day,calls) VALUES (?,0)", (today,))
+    cur = con.execute("UPDATE naver_usage SET calls=calls+1 WHERE day=? AND calls < ?", (today, limit))
+    con.commit()
+    return cur.rowcount == 1
+
+
 def collect(con: sqlite3.Connection, queries: list[str], log=print) -> int:
     cid, sec = config.get("naver_client_id"), config.get("naver_client_secret")
     if not cid or not sec:
-        raise SearchError("설정 탭에서 네이버 API Client ID/Secret을 입력하세요.")
+        raise SearchError("설정 탭에서 NAVER API HUB Client ID/Secret을 입력하세요.")
+    limit = config.naver_daily_limit()
+    if naver_calls_today(con) >= limit:
+        raise SearchError(f"오늘 네이버 검색 한도({limit}회)를 다 썼습니다. 설정 탭에서 한도를 바꾸거나 내일 다시 실행하세요.")
     new = 0
     now = datetime.now().isoformat(timespec="seconds")
     for q in queries:
         for kind in ("cafearticle", "blog"):
+            if not _reserve_naver_call(con, limit):
+                log(f"  하루 한도 {limit}회 도달 — 검색 중단 (신규 {new}건까지 저장)")
+                return new
             try:
                 hits = naver_search(q, kind, cid, sec)
             except httpx.HTTPError as e:
