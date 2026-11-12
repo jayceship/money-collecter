@@ -379,7 +379,7 @@ class FactoriesTab(_TableTab):
     TITLE = "공장 목록"
     TABLE, KEY = "factories", "id"
     COLS = ("score", "status", "name", "region", "industry", "products", "address")
-    HEAD = ("점수", "상태", "회사명", "지역", "업종", "생산품", "주소")
+    HEAD = ("점수", "상태", "회사명", "지역", "업종/산업단지", "생산품", "주소")
     WIDTH = (45, 65, 170, 60, 150, 200, 260)
 
     def __init__(self, master) -> None:
@@ -394,7 +394,7 @@ class FactoriesTab(_TableTab):
         self.region_cb.pack(side="left")
         self.region_cb.bind("<<ComboboxSelected>>", lambda e: self.reload())
         ttk.Label(top, text="  최소 점수:").pack(side="left")
-        self.min_var = tk.StringVar(value="50")
+        self.min_var = tk.StringVar(value="60")
         ms = ttk.Spinbox(top, from_=0, to=100, increment=10, textvariable=self.min_var, width=5, command=self.reload)
         ms.pack(side="left")
         self.hide_done = tk.BooleanVar(value=True)

@@ -85,7 +85,14 @@ class SourceError(Exception):
 _CODE_SCORE = (("2612", 45), ("2611", 45), ("2622", 55), ("2629", 55), ("262", 50), ("261", 45),
                ("263", 35), ("264", 35), ("265", 30), ("26", 30), ("285", 20), ("28", 15))
 _PRODUCT_HOT = re.compile(r"SMT|PBA|PCBA|EMS|실장|PCB\s*조립|기판\s*조립|모듈|전자부품|반도체|커넥터|MLCC|"
-                          r"콘덴서|커패시터|저항|인덕터|센서|IC|LED|파워\s*서플라이|SMPS|전원\s*공급", re.I)
+                          r"콘덴서|커패시터|저항기|인덕터|센서|(?<![A-Za-z])IC(?![A-Za-z])|인쇄회로|반도체|LED|파워\s*서플라이|SMPS|전원\s*공급", re.I)
+# 2025-12 판 CSV(회사명·단지명·생산품·공장주소, 22만 행) 실측 기준으로 나눔
+_PROD_A = re.compile(r"SMT|SMD|(?<![거욕장])실장(?!거울)|PBA|PCBA|EMS|PCB\s*(조립|ASS)|기판\s*조립|인쇄\s*회로|PCB|전자\s*부품|커넥터|"
+                     r"MLCC|콘덴서|커패시터|캐패시터|저항기|인덕터|다이오드|트랜지스터|"
+                     r"(?<![A-Za-z])IC(?![A-Za-z]|\s*TEST)|반도체(?!\s*(제조\s*)?(장비|장치|설비|용|부품\s*가공|웨이퍼\s*제조))", re.I)
+_PROD_B = re.compile(r"전자|모듈|센서|SMPS|전원\s*공급|파워\s*서플라이|컨트롤러|제어기|통신\s*장비|회로|LED|"
+                     r"무선|블랙박스|셋톱|충전기", re.I)
+_PROD_EQUIP = re.compile(r"장비|장치|설비|기계|조명|가로등|등기구|간판|금속|휠타|필터|진공")
 _ELEC_TEXT = re.compile(r"전자|반도체|인쇄회로|PCB|기판|부품|통신|컴퓨터|센서|모듈|커넥터|콘덴서|LED", re.I)
 
 
@@ -119,12 +126,23 @@ def _factory_score(code: str, industry: str, products: str, employees: int | Non
         if code.startswith(prefix):
             s, why = pts, [f"업종 {code}"]
             break
-    if not s and _ELEC_TEXT.search(industry):
+    if not s and industry and _ELEC_TEXT.search(industry):
         s, why = 25, ["업종명 전자 관련"]
-    hot = sorted({m.group(0).upper() for m in _PRODUCT_HOT.finditer(products or "")})
-    if hot:
-        s += min(30, 10 * len(hot))
-        why.append("생산품 " + ", ".join(hot[:4]))
+    p = products or ""
+    tier_a = sorted({m.group(0).upper().replace(" ", "") for m in _PROD_A.finditer(p)})
+    tier_b = sorted({m.group(0).upper().replace(" ", "") for m in _PROD_B.finditer(p)})
+    equip = bool(_PROD_EQUIP.search(p))
+    if tier_a:
+        # 부품을 직접 쓰거나 만드는 곳: 잉여 부품 재고가 생길 가능성이 높음
+        add = 60 + 8 * (len(tier_a) - 1) + (5 if tier_b else 0) - (10 if equip else 0)
+        s = max(s, min(95, add)) if s else min(95, add)
+        why.append("부품 " + ", ".join(tier_a[:4]))
+    elif tier_b:
+        add = 35 + 5 * (len(tier_b) - 1) - (15 if equip else 0)
+        s = max(s, add)
+        why.append("전자 " + ", ".join(tier_b[:4]) + (" (장비·조명류 감점)" if equip else ""))
+    elif not s and _ELEC_TEXT.search(p):
+        s, why = 25, ["생산품 전자 관련(약)"]
     if employees and employees >= 50:
         s += 10
         why.append(f"종업원 {employees}명")
@@ -137,12 +155,14 @@ def import_factories(path: str | Path, log=print) -> tuple[int, int]:
     c_name = _find_col(header, "회사명", "업체명", "상호")
     c_addr = _find_col(header, "공장대표주소(도로명)", "도로명", "공장주소", "주소")
     c_code = _find_col(header, "대표업종", "업종코드")
-    c_ind = _find_col(header, "업종명")
+    c_ind = _find_col(header, "업종명", "단지명")
     c_prod = _find_col(header, "생산품", "주생산품", "제품")
     c_emp = _find_col(header, "종업원합계", "종업원", "고용")
-    if c_name is None or c_addr is None or (c_code is None and c_ind is None):
-        raise SourceError("회사명·주소·업종 열을 찾지 못했습니다. 공공데이터포털 '전국등록공장현황' CSV인지 확인하세요.\n"
+    if c_name is None or c_addr is None or (c_code is None and c_prod is None):
+        raise SourceError("회사명·주소·생산품 열을 찾지 못했습니다. 공공데이터포털 '전국등록공장현황' CSV인지 확인하세요.\n"
                           f"찾은 열: {', '.join(header[:15])}")
+
+    is_ind = c_ind is not None and "업종" in header[c_ind]
 
     def cell(r, i):
         return r[i].strip() if i is not None and i < len(r) else ""
@@ -158,7 +178,7 @@ def import_factories(path: str | Path, log=print) -> tuple[int, int]:
                 emp = int(float(cell(r, c_emp).replace(",", ""))) if cell(r, c_emp) else None
             except ValueError:
                 emp = None
-            score, why = _factory_score(code, industry, products, emp)
+            score, why = _factory_score(code, industry if is_ind else "", products, emp)
             if score < 25:
                 continue
             kept += 1
