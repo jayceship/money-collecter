@@ -43,9 +43,17 @@ BUYERS = [
 STATUSES = ("신규", "연락함", "응답옴", "진행중", "거절", "제외")
 
 _TAG = re.compile(r"<[^>]+>")
-_SELLER_HINT = re.compile(r"처분|정리|판매|팝니다|땡처리|떨이|급매|재고\s*있")
+# 실제 검색 결과(2026-11-12, 579건) 기준으로 조정: 낚시 '릴', 뉴스의 '반도체' 등 오탐 제거
+_ELEC_HINT = re.compile(
+    r"전자\s*부품|반도체|MLCC|(?<![A-Za-z])IC(?![A-Za-z])|커넥터|저항|콘덴서|커패시터|캐패시터|인덕터|다이오드"
+    r"|트랜지스터|SMD|MCU|FPGA|메모리\s*칩|릴\s*부품|칩\s*부품|수동\s*부품|능동\s*부품|수동\s*소자|능동\s*소자", re.I)
+_SELLER_HINT = re.compile(
+    r"재고\s*(처분|정리|판매|소진|있습니다)|잉여\s*(재고|부품|자재)|악성\s*재고|장기\s*재고|불용\s*(재고|자재)"
+    r"|땡처리|떨이|급처|일괄\s*(판매|처분|매각|정리)|처분합니다|정리합니다|팝니다|판매합니다|폐업")
+# '매입'이 들어간 글은 대부분 매입업체 홍보글 → 판매자가 아니라 매입처(유통사) 후보
 _BUYER_HINT = re.compile(r"매입|삽니다|구매합니다|구합니다|최고가|고가\s*매입")
-_ELEC_HINT = re.compile(r"전자|부품|IC|반도체|MLCC|커넥터|칩|릴|트레이|저항|콘덴서|PCB|모듈", re.I)
+# 제목이 이런 글은 정보·광고·뉴스
+_NOISE_TITLE = re.compile(r"구매\s*방법|구매대행|대리점|디지키|마우저|소싱|가이드|총정리|추천|리뷰|후기|뉴스|주가|전망|키워드|헤드라인|신문|스크랩_|관련주|체크리스|전략|노하우|방법")
 
 
 def _clean(s: str) -> str:
@@ -251,8 +259,17 @@ def _ai_classify(lead: sqlite3.Row, api_key: str, model: str) -> tuple[dict, dic
 
 def _rule_classify(lead: sqlite3.Row) -> dict:
     text = f"{lead['title']} {lead['snippet']}"
+    elec = bool(_ELEC_HINT.search(text))
     buyer, seller = bool(_BUYER_HINT.search(text)), bool(_SELLER_HINT.search(text))
-    role = "buyer" if buyer and not seller else "seller" if seller and not buyer else "other"
+    noise = bool(_NOISE_TITLE.search(lead["title"] or ""))
+    if not elec or (noise and not re.search(r"매입", lead["title"] or "")):
+        role = "other"
+    elif buyer:
+        role = "buyer"
+    elif seller and not noise:
+        role = "seller"
+    else:
+        role = "other"
     cats = sorted({m.group(0) for m in re.finditer(
         r"MLCC|IC|커넥터|저항|콘덴서|커패시터|인덕터|다이오드|반도체|모듈|PCB", text, re.I)})
     return {"role": role, "confidence": 0.4 if role != "other" else 0.2, "items": ", ".join(cats),
@@ -306,7 +323,7 @@ def purge_old(con: sqlite3.Connection) -> int:
     return n
 
 
-def classify_pending(con: sqlite3.Connection, log=print, limit: int = 100, use_ai: bool = False) -> int:
+def classify_pending(con: sqlite3.Connection, log=print, limit: int = 2000, use_ai: bool = False) -> int:
     # 네이버 검색 결과를 외부 AI에 넣는 것은 개정 특약(AI 활용 제한)에 걸릴 수 있어 기본은 규칙 판별.
     key = config.get("anthropic_api_key") if use_ai else None
     model = config.get("anthropic_model") or config.DEFAULT_MODEL
